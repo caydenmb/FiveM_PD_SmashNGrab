@@ -1,24 +1,31 @@
 local QBCore = exports['qb-core']:GetCoreObject()
 
 -- ///////////////////////////////////////////////////////////////////////////
--- IsAuthorized(): true if your job is allowed
+-- CONFIG REFERENCE
+--   Config.MaxTargetDistance, Config.AuthorizedJobs, Config.WindowIndex, etc.
+-- ///////////////////////////////////////////////////////////////////////////
+
+-- ///////////////////////////////////////////////////////////////////////////
+-- Authorization check
 -- ///////////////////////////////////////////////////////////////////////////
 local function IsAuthorized()
     local pd = QBCore.Functions.GetPlayerData()
     if not pd or not pd.job then return false end
     for _, job in ipairs(Config.AuthorizedJobs) do
-        if pd.job.name == job then return true end
+        if pd.job.name == job then
+            return true
+        end
     end
     return false
 end
 
 -- ///////////////////////////////////////////////////////////////////////////
--- GetNearbyPlayers(): returns list of { serverId, ped, dist, name }
+-- Gather all players within Config.MaxTargetDistance
 -- ///////////////////////////////////////////////////////////////////////////
 local function GetNearbyPlayers()
     local mePed = PlayerPedId()
     local mePos = GetEntityCoords(mePed)
-    local out  = {}
+    local out = {}
 
     for _, serverId in ipairs(QBCore.Functions.GetPlayers()) do
         local ped = GetPlayerPed(serverId)
@@ -29,7 +36,7 @@ local function GetNearbyPlayers()
                     serverId = serverId,
                     ped      = ped,
                     dist     = dist,
-                    name     = GetPlayerName(serverId) -- native to fetch their display name
+                    name     = GetPlayerName(serverId)
                 }
             end
         end
@@ -39,14 +46,14 @@ local function GetNearbyPlayers()
 end
 
 -- ///////////////////////////////////////////////////////////////////////////
--- Smash & drag logic.
+-- Smash window & drag logic.
 -- ///////////////////////////////////////////////////////////////////////////
 local function DoBreakWindowAndDrag(targetPed, seatIdx)
     local veh       = GetVehiclePedIsIn(targetPed, false)
     local windowIdx = Config.WindowIndex[seatIdx]
     local seatName  = Config.SeatNames[seatIdx] or "unknown"
 
-    -- Smash
+    -- Smash window
     SmashVehicleWindow(veh, windowIdx)
     QBCore.Functions.Notify(("🔨 Smashed %s window."):format(seatName), "success")
     Wait(250)
@@ -55,7 +62,7 @@ local function DoBreakWindowAndDrag(targetPed, seatIdx)
     TaskLeaveVehicle(targetPed, veh, 0)
     Wait(500)
 
-    -- Reposition
+    -- Reposition on exit
     local offset   = Config.ExitOffsets[seatIdx]
     local worldPos = GetOffsetFromEntityInWorldCoords(veh, offset)
     SetEntityCoords(targetPed, worldPos.x, worldPos.y, worldPos.z)
@@ -65,66 +72,57 @@ local function DoBreakWindowAndDrag(targetPed, seatIdx)
 end
 
 -- ///////////////////////////////////////////////////////////////////////////
--- Handler once a specific player is chosen
+-- Called when the player selects someone from the menu
 -- ///////////////////////////////////////////////////////////////////////////
 RegisterNetEvent('police:client:ConfirmBreak', function(data)
-    local targetPed = GetPlayerPed(data.serverId)
-    if targetPed == PlayerPedId() then return end
+    local ped = GetPlayerPed(data.serverId)
+    if ped == PlayerPedId() then return end
 
-    -- make sure they’re still in a vehicle
-    local veh = GetVehiclePedIsIn(targetPed, false)
+    -- Ensure they’re still in a vehicle
+    local veh = GetVehiclePedIsIn(ped, false)
     if veh == 0 then
-        QBCore.Functions.Notify("❗ Suspect is no longer in a vehicle.", "error")
-        return
+        return QBCore.Functions.Notify("❗ Suspect left the vehicle.", "error")
     end
 
-    -- find their seat
-    local seatIdx = nil
+    -- Find their seat
+    local seatIdx
     for s = -1, GetVehicleMaxNumberOfPassengers(veh)-1 do
-        if GetPedInVehicleSeat(veh, s) == targetPed then
+        if GetPedInVehicleSeat(veh, s) == ped then
             seatIdx = s
             break
         end
     end
+
     if not seatIdx or not Config.WindowIndex[seatIdx] then
-        QBCore.Functions.Notify("❗ Unable to determine window.", "error")
-        return
+        return QBCore.Functions.Notify("❗ Unable to determine window.", "error")
     end
 
-    DoBreakWindowAndDrag(targetPed, seatIdx)
+    DoBreakWindowAndDrag(ped, seatIdx)
 end)
 
 -- ///////////////////////////////////////////////////////////////////////////
--- Main command: either auto‑target or show selection menu
+-- Main handler: either auto‑target or show a menu if there’s more than one
 -- ///////////////////////////////////////////////////////////////////////////
 local function BreakWindowHandler()
-    -- Auth check
     if not IsAuthorized() then
-        QBCore.Functions.Notify("❌ You are not authorized to use this.", "error")
-        return
+        return QBCore.Functions.Notify("❌ You are not authorized.", "error")
     end
 
-    -- Gather players
     local nearby = GetNearbyPlayers()
     if #nearby == 0 then
-        QBCore.Functions.Notify(("⚠️ No suspects within %.1fm."):format(Config.MaxTargetDistance), "error")
-        return
-
+        return QBCore.Functions.Notify(("⚠️ No suspects within %.1fm."):format(Config.MaxTargetDistance), "error")
     elseif #nearby == 1 then
-        -- Single target: do it immediately
+        -- Only one choice: do it immediately
         local entry = nearby[1]
-        BreakWindowHandler = nil
-        -- Find seat quickly:
-        local veh = GetVehiclePedIsIn(entry.ped, false)
+        local veh   = GetVehiclePedIsIn(entry.ped, false)
         local seatIdx
         for s = -1, GetVehicleMaxNumberOfPassengers(veh)-1 do
             if GetPedInVehicleSeat(veh, s) == entry.ped then seatIdx = s; break end
         end
         DoBreakWindowAndDrag(entry.ped, seatIdx)
-
     else
-        -- Multiple: build a menu
-        local menu = {{ header = "Select Suspect", txt = "" }}
+        -- Multiple choices: build and open a qb-menu
+        local menu = {{ header = "🔍 Select a suspect", txt = "" }}
         for _, ply in ipairs(nearby) do
             menu[#menu+1] = {
                 header = ply.name,
@@ -136,20 +134,21 @@ local function BreakWindowHandler()
             }
         end
         menu[#menu+1] = {
-            header = "Cancel",
+            header = "❌ Cancel",
             txt    = "",
             params = { event = "qb-menu:closeMenu" }
         }
-
         exports['qb-menu']:openMenu(menu)
     end
 end
 
 -- ///////////////////////////////////////////////////////////////////////////
--- Register chat command.
+-- THIRD EYE MAPPING
+-- Binds Left Alt (LMENU) so that HOLDING it runs BreakWindowHandler()
 -- ///////////////////////////////////////////////////////////////////////////
+-- Note: RegisterKeyMapping will fire once per press. If you want “hold to keep
+-- the menu open,” you’d need a more elaborate loop; this covers the common case.
+RegisterKeyMapping('breakwindow', 'Third Eye: Smash & Drag', 'keyboard', 'LMENU')
 RegisterCommand('breakwindow', BreakWindowHandler, false)
---[[ 
--- Optional key bind:
-RegisterKeyMapping('breakwindow', 'Smash window & drag suspect', 'keyboard', 'G')
---]]
+
+-- You can still type /breakwindow if you prefer chat commands.
