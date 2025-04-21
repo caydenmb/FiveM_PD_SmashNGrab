@@ -146,8 +146,7 @@ end
 -- THIRD EYE MAPPING
 -- Binds Left Alt (LMENU) so that HOLDING it runs BreakWindowHandler()
 -- ///////////////////////////////////////////////////////////////////////////
--- Note: RegisterKeyMapping will fire once per press. If you want “hold to keep
--- the menu open,” you’d need a more elaborate loop; this covers the common case.
+-- Note: RegisterKeyMapping will fire once per press.
 RegisterKeyMapping('breakwindow', 'Third Eye: Smash & Drag', 'keyboard', 'LMENU')
 RegisterCommand('breakwindow', BreakWindowHandler, false)
 
